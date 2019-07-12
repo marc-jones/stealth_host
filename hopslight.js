@@ -20,13 +20,19 @@ CharacterState.prototype = {
 	,setCharacter: function(characterInit) {
 		this.character = characterInit;
 	}
-	,takeTurn: function(level,player) {
+	,takeTurn: function(level,player,allEnemies,force) {
+		if(force == null) {
+			force = false;
+		}
+		return true;
 	}
 	,copy: function() {
 		return new CharacterState();
 	}
 	,returnStartingPosition: function() {
 		return new HexCoord(0,0,0);
+	}
+	,updateTargets: function(level) {
 	}
 	,__class__: CharacterState
 };
@@ -45,11 +51,15 @@ AlertState.prototype = $extend(CharacterState.prototype,{
 	params: null
 	,hexMaths: null
 	,lastKnownPlayerLocation: null
-	,takeTurn: function(level,player) {
+	,takeTurn: function(level,player,allEnemies,force) {
+		if(force == null) {
+			force = false;
+		}
 		var _gthis = this;
+		this.character.updateVisibleHexes(level);
 		var playerInSight = this.checkForPlayer(player);
 		if(playerInSight) {
-			(js_Boot.__cast(this.character , Guard)).shootCharacter(player);
+			(js_Boot.__cast(this.character , Guard)).shootCharacter(player,level);
 		} else {
 			var callback = function() {
 				_gthis.checkForPlayer(player);
@@ -57,14 +67,38 @@ AlertState.prototype = $extend(CharacterState.prototype,{
 			if(this.character.hexPos.equals(this.lastKnownPlayerLocation)) {
 				(js_Boot.__cast(this.character , Guard)).updateState(new SearchingState(this.lastKnownPlayerLocation));
 			} else {
-				var pathArray = level.getPath(this.character.hexPos,this.lastKnownPlayerLocation);
+				var pathArray = [];
+				if(force) {
+					pathArray = level.getEnemyAwarePath(this.character,allEnemies,this.lastKnownPlayerLocation);
+				} else {
+					pathArray = level.getPath(this.character.hexPos,this.lastKnownPlayerLocation);
+				}
 				var nextHex = pathArray[1];
-				if(nextHex != null) {
+				if(nextHex == null) {
+					return false;
+				}
+				var isEnemyOnNextHex = function(enemy) {
+					return enemy.hexPos.equals(nextHex);
+				};
+				var enemiesOnNextHex = allEnemies.filter(isEnemyOnNextHex);
+				if(player != null && player.hexPos.equals(nextHex)) {
+					var tmp = this.character.hexPos;
+					var tmp1 = this.character.hexPos.subtract(nextHex);
+					this.character.previousHexPos = tmp.add(tmp1);
+					this.character.updateHexFacing();
+					this.character.updateVisibleHexes(level);
+					return true;
+				}
+				if(enemiesOnNextHex.length > 0) {
+					return false;
+				} else {
 					this.character.animateMoveToHex(nextHex,callback);
 					this.character.updateVisibleHexes(level);
+					return true;
 				}
 			}
 		}
+		return true;
 	}
 	,checkForPlayer: function(player) {
 		var playerInSight = player != null && player.hexPos.isInArray(this.character.visibleHexes);
@@ -76,6 +110,14 @@ AlertState.prototype = $extend(CharacterState.prototype,{
 	,copy: function() {
 		var returnState = new AlertState(this.lastKnownPlayerLocation);
 		return returnState;
+	}
+	,updateTargets: function(level) {
+		if(level.isSolidAtHexCoord(this.lastKnownPlayerLocation)) {
+			var neighbours = level.getReachableHexes(this.lastKnownPlayerLocation,1,1);
+			if(neighbours.length > 0) {
+				this.lastKnownPlayerLocation = flixel_FlxG.random.getObject_HexCoord(neighbours);
+			}
+		}
 	}
 	,__class__: AlertState
 });
@@ -250,7 +292,7 @@ lime__$internal_backend_html5_HTML5Application.prototype = {
 		window.addEventListener("resize",$bind(this,this.handleWindowEvent),false);
 		window.addEventListener("beforeunload",$bind(this,this.handleWindowEvent),false);
 		window.addEventListener("devicemotion",$bind(this,this.handleSensorEvent),false);
-
+		
 			if (!CanvasRenderingContext2D.prototype.isPointInStroke) {
 				CanvasRenderingContext2D.prototype.isPointInStroke = function (path, x, y) {
 					return false;
@@ -878,9 +920,9 @@ ApplicationMain.create = function(config) {
 	ManifestResources.init(config);
 	var _this = app.meta;
 	if(__map_reserved["build"] != null) {
-		_this.setReserved("build","46");
+		_this.setReserved("build","72");
 	} else {
-		_this.h["build"] = "46";
+		_this.h["build"] = "72";
 	}
 	var _this1 = app.meta;
 	if(__map_reserved["company"] != null) {
@@ -7350,12 +7392,15 @@ Character.prototype = $extend(flixel_group_FlxTypedSpriteGroup.prototype,{
 	,setHexPos: function(hexCoord) {
 		this.previousHexPos = this.hexPos;
 		this.hexPos = hexCoord;
+		this.updateHexFacing();
+	}
+	,updateHexFacing: function() {
 		if(this.previousHexPos != null) {
 			var _g = [];
 			var _g1 = 0;
 			while(_g1 < 6) {
 				var direction = _g1++;
-				if(hexCoord.hexNeighbour(direction).equals(this.previousHexPos)) {
+				if(this.hexPos.hexNeighbour(direction).equals(this.previousHexPos)) {
 					_g.push(direction);
 				}
 			}
@@ -7387,6 +7432,31 @@ Character.prototype = $extend(flixel_group_FlxTypedSpriteGroup.prototype,{
 			this.characterSprite.animation.play("northside");
 		}
 	}
+	,getHexCoordsBehind: function() {
+		var neighbourIndices = [this.hexFacing + 2,this.hexFacing + 3,this.hexFacing + 4];
+		var _g1 = 0;
+		var _g = neighbourIndices.length;
+		while(_g1 < _g) {
+			var idx = _g1++;
+			if(neighbourIndices[idx] > 5) {
+				neighbourIndices[idx] -= 6;
+			}
+		}
+		var _g2 = [];
+		var _g11 = 0;
+		while(_g11 < neighbourIndices.length) {
+			var direction = neighbourIndices[_g11];
+			++_g11;
+			_g2.push(this.hexPos.hexNeighbour(direction));
+		}
+		return _g2;
+	}
+	,isHexBehind: function(inputHex) {
+		return Lambda.filter(this.getHexCoordsBehind(),$bind(inputHex,inputHex.equals)).length > 0;
+	}
+	,isHexInFront: function(inputHex) {
+		return inputHex.equals(this.hexPos.hexNeighbour(this.hexFacing));
+	}
 	,teleport: function(hexCoord,previousHexCoord) {
 		this.hexPos = previousHexCoord;
 		this.setHexPos(hexCoord);
@@ -7395,7 +7465,11 @@ Character.prototype = $extend(flixel_group_FlxTypedSpriteGroup.prototype,{
 		this.setPosition(pixelPos.x,pixelPos.y);
 		this.startStatusTween();
 	}
-	,takeTurn: function(level,player) {
+	,takeTurn: function(level,player,allEnemies,force) {
+		if(force == null) {
+			force = false;
+		}
+		return true;
 	}
 	,animateMoveToHex: function(nextHex,inputCallback) {
 		var _gthis = this;
@@ -7441,6 +7515,27 @@ Character.prototype = $extend(flixel_group_FlxTypedSpriteGroup.prototype,{
 		return this.currentHealth <= 0;
 	}
 	,__class__: Character
+});
+var DeadState = function() {
+	CharacterState.call(this);
+	this.name = "dead";
+	this.iconPath = "assets/images/deadstate.png";
+};
+$hxClasses["DeadState"] = DeadState;
+DeadState.__name__ = ["DeadState"];
+DeadState.__super__ = CharacterState;
+DeadState.prototype = $extend(CharacterState.prototype,{
+	takeTurn: function(level,player,allEnemies,force) {
+		if(force == null) {
+			force = false;
+		}
+		return true;
+	}
+	,copy: function() {
+		var returnState = new DeadState();
+		return returnState;
+	}
+	,__class__: DeadState
 });
 var EReg = function(r,opt) {
 	this.r = new RegExp(r,opt.split("u").join(""));
@@ -7547,9 +7642,10 @@ EnemyCreator.prototype = {
 	,level: null
 	,generateEnemyArray: function() {
 		var returnArray = [];
-		var _g = 0;
-		while(_g < 2) {
-			var idx = _g++;
+		var _g1 = 0;
+		var _g = Math.floor(Math.log(this.floorNumber + 1) / Math.log(2));
+		while(_g1 < _g) {
+			var idx = _g1++;
 			var guard = new Guard(new PatrollingState(this.generateWaypoints()));
 			returnArray.push(guard);
 		}
@@ -8281,8 +8377,11 @@ GameOverState.prototype = $extend(flixel_FlxState.prototype,{
 	,__class__: GameOverState
 });
 var GameParameters = function() {
-	this.projectileSpeed = 180;
+	this.bulletOffset = 0.3;
+	this.projectileSpeed = 200.0;
 	this.uiPadding = 5;
+	this.overlayMouseDownAlpha = 0.1;
+	this.overlayMouseOverAlpha = 0.8;
 	this.overlayAlpha = 0.3;
 	this.maxWaypointDistance = 6;
 	this.minWaypointDistance = 4;
@@ -8329,8 +8428,11 @@ GameParameters.prototype = {
 	,minWaypointDistance: null
 	,maxWaypointDistance: null
 	,overlayAlpha: null
+	,overlayMouseOverAlpha: null
+	,overlayMouseDownAlpha: null
 	,uiPadding: null
 	,projectileSpeed: null
+	,bulletOffset: null
 	,__class__: GameParameters
 };
 var Guard = function(startState) {
@@ -8345,29 +8447,35 @@ Guard.prototype = $extend(Character.prototype,{
 	update: function(elapsed) {
 		Character.prototype.update.call(this,elapsed);
 	}
-	,takeTurn: function(level,player) {
+	,takeTurn: function(level,player,allEnemies,force) {
+		if(force == null) {
+			force = false;
+		}
 		if(this.visibleHexes == null) {
 			this.updateVisibleHexes(level);
 		}
-		this.currentState.takeTurn(level,player);
+		return this.currentState.takeTurn(level,player,allEnemies,force);
 	}
-	,shootCharacter: function(targetCharacter) {
+	,shootCharacter: function(targetCharacter,level) {
 		var projectile = new flixel_FlxSprite();
 		projectile.loadGraphic("assets/images/projectile.png");
-		var tmp = this.characterSprite.getMidpoint().angleBetween(targetCharacter.characterSprite.getMidpoint());
+		var projectilePath = level.returnProjectilePath(this.hexPos,targetCharacter.hexPos);
+		var travelDistance = projectilePath[0].distanceTo(projectilePath[1]);
+		var tmp = projectilePath[0].angleBetween(projectilePath[1]);
 		projectile.set_angle(tmp);
-		var tmp1 = this.characterSprite.get_width() / 2 - projectile.get_width() / 2;
+		var relativeStartPoint = this.hexMaths.hexCoordToSpritePixelPos(this.hexPos);
+		var relativeStartPoint1 = projectilePath[0].subtractPoint(relativeStartPoint);
+		var tmp1 = relativeStartPoint1.x - projectile.get_width() / 2;
 		projectile.set_x(tmp1);
-		var tmp2 = this.characterSprite.get_height() / 2 - projectile.get_height() / 2;
+		var tmp2 = relativeStartPoint1.y - projectile.get_height() / 2;
 		projectile.set_y(tmp2);
 		this.add(projectile);
 		var destroyProjectile = function(tween) {
 			projectile.kill();
 			targetCharacter.inflictDamage(1);
 		};
-		var tmp3 = { x : targetCharacter.characterSprite.getMidpoint().x - projectile.get_width() / 2, y : targetCharacter.characterSprite.getMidpoint().y - projectile.get_height() / 2};
-		var tmp4 = this.characterSprite.getMidpoint().distanceTo(targetCharacter.characterSprite.getMidpoint()) / this.params.projectileSpeed;
-		flixel_tweens_FlxTween.tween(projectile,tmp3,tmp4,{ onComplete : destroyProjectile});
+		var tmp3 = { x : projectilePath[1].x - projectile.get_width() / 2, y : projectilePath[1].y - projectile.get_height() / 2};
+		flixel_tweens_FlxTween.tween(projectile,tmp3,travelDistance / this.params.projectileSpeed,{ onComplete : destroyProjectile});
 	}
 	,potentialHexesInLineOfSight: function() {
 		var returnArray = [];
@@ -8413,7 +8521,8 @@ Guard.prototype = $extend(Character.prototype,{
 	}
 	,__class__: Guard
 });
-var HUD = function(player) {
+var HUD = function(playerInput,levelInput,enemyArrayInput) {
+	this.optionPauseToggle = false;
 	this.overlayToggle = false;
 	this.params = new GameParameters();
 	flixel_group_FlxTypedGroup.call(this);
@@ -8434,7 +8543,13 @@ var HUD = function(player) {
 	var overlayButton = new flixel_ui_FlxButton(0,this.params.screenHeight - this.params.marginBottom,"",$bind(this,this.toggleOverlay));
 	overlayButton.loadGraphic("assets/images/overlaybutton.png");
 	this.add(overlayButton);
-	this.setupHealth(player);
+	var itemButton = new flixel_ui_FlxButton(this.params.screenWidth - overlayButton.get_width(),this.params.screenHeight - this.params.marginBottom,"",$bind(this,this.itemSelectionCallback));
+	itemButton.loadGraphic("assets/images/itembutton.png");
+	this.add(itemButton);
+	this.player = playerInput;
+	this.currentLevel = levelInput;
+	this.enemyArray = enemyArrayInput;
+	this.setupHealth();
 };
 $hxClasses["HUD"] = HUD;
 HUD.__name__ = ["HUD"];
@@ -8445,27 +8560,70 @@ HUD.prototype = $extend(flixel_group_FlxTypedGroup.prototype,{
 	,textTurnNumber: null
 	,heartArray: null
 	,overlayToggle: null
-	,updateHUD: function(currentFloor,turnNumber,player) {
+	,optionPauseToggle: null
+	,optionOverlay: null
+	,optionResult: null
+	,optionCallback: null
+	,positionOverlay: null
+	,positionResult: null
+	,positionCallback: null
+	,player: null
+	,currentLevel: null
+	,enemyArray: null
+	,cancelButton: null
+	,itemSelectionCallback: function() {
+		var _gthis = this;
+		if(!this.optionPauseToggle && !this.overlayToggle) {
+			var itemNames = [];
+			var _g = 0;
+			var _g1 = this.player.items;
+			while(_g < _g1.length) {
+				var item = _g1[_g];
+				++_g;
+				if(item.uses > 0) {
+					itemNames.push(item.name);
+				}
+			}
+			var itemCallback = function(inputName) {
+				var _g2 = 0;
+				var _g11 = _gthis.player.items;
+				while(_g2 < _g11.length) {
+					var item1 = _g11[_g2];
+					++_g2;
+					if(item1.name == inputName) {
+						item1.setup(_gthis.player,_gthis.currentLevel,_gthis.enemyArray,_gthis);
+					}
+				}
+			};
+			this.displayOptionOverlay(itemNames,itemCallback);
+		}
+	}
+	,updateHUD: function(currentFloor,turnNumber,playerInput,levelInput,enemyArrayInput) {
 		this.textCurrentFloor.set_text("Floor: " + currentFloor);
 		this.textTurnNumber.set_text("Total turns: " + turnNumber);
-		this.updateHealth(player);
+		this.player = playerInput;
+		this.currentLevel = levelInput;
+		this.enemyArray = enemyArrayInput;
+		this.updateHealth();
 	}
 	,toggleOverlay: function() {
-		this.overlayToggle = !this.overlayToggle;
+		if(!this.optionPauseToggle) {
+			this.overlayToggle = !this.overlayToggle;
+		}
 	}
-	,setupHealth: function(player) {
+	,setupHealth: function() {
 		this.heartArray = [];
 		var _g1 = 0;
-		var _g = player.totalHealth;
+		var _g = this.player.totalHealth;
 		while(_g1 < _g) {
 			var heartIdx = _g1++;
 			this.addHeart(heartIdx);
 		}
-		this.updateHealth(player);
+		this.updateHealth();
 	}
-	,updateHealth: function(player) {
+	,updateHealth: function() {
 		var _g1 = this.heartArray.length;
-		var _g = player.totalHealth;
+		var _g = this.player.totalHealth;
 		while(_g1 < _g) {
 			var heartIdx = _g1++;
 			this.addHeart(heartIdx);
@@ -8474,7 +8632,7 @@ HUD.prototype = $extend(flixel_group_FlxTypedGroup.prototype,{
 		var _g2 = this.heartArray.length;
 		while(_g11 < _g2) {
 			var heartIdx1 = _g11++;
-			if(heartIdx1 < player.currentHealth) {
+			if(heartIdx1 < this.player.currentHealth) {
 				this.heartArray[heartIdx1].fill();
 			} else {
 				this.heartArray[heartIdx1].empty();
@@ -8486,6 +8644,84 @@ HUD.prototype = $extend(flixel_group_FlxTypedGroup.prototype,{
 		var heartElement = new HeartUIElement(idx * (referenceHeart.get_width() + this.params.uiPadding | 0),45);
 		this.add(heartElement);
 		this.heartArray.push(heartElement);
+	}
+	,addCancelButton: function() {
+		this.cancelButton = new flixel_ui_FlxButton(0,0,"",$bind(this,this.cancelButtonCallback));
+		this.cancelButton.loadGraphic("assets/images/cancelbutton.png");
+		this.cancelButton.set_x(this.params.screenWidth - this.cancelButton.get_width());
+		this.cancelButton.set_y(this.params.screenHeight - this.params.marginBottom);
+		this.add(this.cancelButton);
+	}
+	,cancelButtonCallback: function() {
+		if(this.optionCallback != null) {
+			this.optionPauseToggle = false;
+			this.optionOverlay.destroy();
+			this.optionCallback = null;
+			this.optionResult = null;
+		}
+		if(this.positionCallback != null) {
+			this.optionPauseToggle = false;
+			this.positionOverlay.destroy();
+			this.positionCallback = null;
+			this.positionResult = null;
+		}
+		this.remove(this.cancelButton);
+	}
+	,checkOptionResult: function() {
+		if(this.optionResult != null) {
+			this.optionPauseToggle = false;
+			this.optionOverlay.destroy();
+			this.remove(this.cancelButton);
+			this.optionCallback(this.optionResult);
+			this.optionCallback = null;
+			this.optionResult = null;
+		}
+		if(this.positionResult != null) {
+			this.optionPauseToggle = false;
+			this.positionOverlay.destroy();
+			this.remove(this.cancelButton);
+			this.positionCallback(this.positionResult);
+			this.positionCallback = null;
+			this.positionResult = null;
+		}
+	}
+	,displayOptionOverlay: function(inputNames,resultCallback) {
+		var _gthis = this;
+		this.optionPauseToggle = true;
+		var callbackArray = [];
+		var _g = 0;
+		while(_g < inputNames.length) {
+			var name = [inputNames[_g]];
+			++_g;
+			callbackArray.push((function(name1) {
+				return function() {
+					_gthis.optionResult = name1[0];
+				};
+			})(name));
+		}
+		this.optionOverlay = new OptionOverlay(inputNames,callbackArray);
+		this.add(this.optionOverlay);
+		this.optionCallback = resultCallback;
+		this.addCancelButton();
+	}
+	,displayPositionOverlay: function(inputHexCoords,resultCallback) {
+		var _gthis = this;
+		this.optionPauseToggle = true;
+		var callbackArray = [];
+		var _g = 0;
+		while(_g < inputHexCoords.length) {
+			var hexCoord = [inputHexCoords[_g]];
+			++_g;
+			callbackArray.push((function(hexCoord1) {
+				return function() {
+					_gthis.positionResult = hexCoord1[0];
+				};
+			})(hexCoord));
+		}
+		this.positionOverlay = new PositionOverlay(inputHexCoords,callbackArray);
+		this.add(this.positionOverlay);
+		this.positionCallback = resultCallback;
+		this.addCancelButton();
 	}
 	,__class__: HUD
 });
@@ -8583,6 +8819,9 @@ HexCoord.prototype = {
 		}
 		return _g;
 	}
+	,convertToFractionalHexCoord: function() {
+		return new FractionalHexCoord(this.i,this.j,this.k);
+	}
 	,__class__: HexCoord
 };
 var HexMaths = function() {
@@ -8595,6 +8834,10 @@ HexMaths.prototype = {
 	params: null
 	,hexToPixelMatrix: null
 	,hexCoordToPixelPos: function(hexPos) {
+		var returnPoint = this.hexToPixelMatrix.transformPoint(new openfl_geom_Point(hexPos.i,hexPos.j));
+		return new flixel_math_FlxPoint(returnPoint.x,returnPoint.y).addPoint(this.params.originHexPixelPosition);
+	}
+	,fractionalHexCoordToPixelPos: function(hexPos) {
 		var returnPoint = this.hexToPixelMatrix.transformPoint(new openfl_geom_Point(hexPos.i,hexPos.j));
 		return new flixel_math_FlxPoint(returnPoint.x,returnPoint.y).addPoint(this.params.originHexPixelPosition);
 	}
@@ -8688,6 +8931,17 @@ IntIterator.prototype = {
 	}
 	,__class__: IntIterator
 };
+var Item = function() {
+};
+$hxClasses["Item"] = Item;
+Item.__name__ = ["Item"];
+Item.prototype = {
+	name: null
+	,uses: null
+	,setup: function(player,level,enemyArray,hud) {
+	}
+	,__class__: Item
+};
 var Lambda = function() { };
 $hxClasses["Lambda"] = Lambda;
 Lambda.__name__ = ["Lambda"];
@@ -8712,12 +8966,16 @@ Lambda.filter = function(it,f) {
 	return l;
 };
 var Level = function() {
+	this.params = new GameParameters();
+	this.hexMaths = new HexMaths();
 	this.tileMap = new haxe_ds_IntMap();
 };
 $hxClasses["Level"] = Level;
 Level.__name__ = ["Level"];
 Level.prototype = {
 	tileMap: null
+	,hexMaths: null
+	,params: null
 	,setTile: function(tile) {
 		if(this.tileMap.h[tile.hexPos.i] == null) {
 			var this1 = this.tileMap;
@@ -8821,11 +9079,36 @@ Level.prototype = {
 		var last = endHexCoord;
 		while(!last.equals(startHexCoord)) {
 			returnArray.push(last);
+			if(cameFrom.h[last.i] == null || cameFrom.h[last.i].h[last.j] == null) {
+				return [];
+			}
 			last = cameFrom.h[last.i].h[last.j];
 		}
 		returnArray.push(startHexCoord);
 		returnArray.reverse();
 		return returnArray;
+	}
+	,getEnemyAwarePath: function(primaryCharacter,allCharacters,endHexCoord) {
+		var changedHexArray = [];
+		var _g = 0;
+		while(_g < allCharacters.length) {
+			var character = allCharacters[_g];
+			++_g;
+			if(character != primaryCharacter) {
+				if((this.getTileAtHexCoord(character.hexPos).allowCollisions & 4369) <= 0) {
+					changedHexArray.push(character.hexPos);
+					this.getTileAtHexCoord(character.hexPos).set_solid(true);
+				}
+			}
+		}
+		var returnPath = this.getPath(primaryCharacter.hexPos,endHexCoord);
+		var _g1 = 0;
+		while(_g1 < changedHexArray.length) {
+			var tempHexPos = changedHexArray[_g1];
+			++_g1;
+			this.getTileAtHexCoord(tempHexPos).set_solid(false);
+		}
+		return returnPath;
 	}
 	,getReachableHexes: function(startHexCoord,minDistance,maxDistance) {
 		var _gthis = this;
@@ -8876,7 +9159,7 @@ Level.prototype = {
 		}
 		var visible = false;
 		var _g = 0;
-		var _g1 = [new FractionalHexCoord(0,-2e-6,2e-6),new FractionalHexCoord(2e-6,0,-2e-6),new FractionalHexCoord(-2e-6,2e-6,0)];
+		var _g1 = [new FractionalHexCoord(0,-2e-6,2e-6),new FractionalHexCoord(2e-6,-2e-6,0),new FractionalHexCoord(2e-6,0,-2e-6),new FractionalHexCoord(0,2e-6,-2e-6),new FractionalHexCoord(-2e-6,2e-6,0),new FractionalHexCoord(-2e-6,0,2e-6)];
 		while(_g < _g1.length) {
 			var epsilon = _g1[_g];
 			++_g;
@@ -8886,8 +9169,36 @@ Level.prototype = {
 			} else {
 				visible = true;
 			}
+			if(visible) {
+				return visible;
+			}
 		}
 		return visible;
+	}
+	,returnProjectilePath: function(startHexCoord,endHexCoord) {
+		var _g = 0;
+		var _g1 = [new FractionalHexCoord(0,0,0),new FractionalHexCoord(0,-this.params.bulletOffset,this.params.bulletOffset),new FractionalHexCoord(this.params.bulletOffset,-this.params.bulletOffset,0),new FractionalHexCoord(this.params.bulletOffset,0,-this.params.bulletOffset),new FractionalHexCoord(0,this.params.bulletOffset,-this.params.bulletOffset),new FractionalHexCoord(-this.params.bulletOffset,this.params.bulletOffset,0),new FractionalHexCoord(-this.params.bulletOffset,0,this.params.bulletOffset)];
+		while(_g < _g1.length) {
+			var offset = _g1[_g];
+			++_g;
+			var visible = true;
+			var _g2 = 0;
+			var _g3 = [new FractionalHexCoord(0,-2e-6,2e-6),new FractionalHexCoord(2e-6,-2e-6,0),new FractionalHexCoord(2e-6,0,-2e-6),new FractionalHexCoord(0,2e-6,-2e-6),new FractionalHexCoord(-2e-6,2e-6,0),new FractionalHexCoord(-2e-6,0,2e-6)];
+			while(_g2 < _g3.length) {
+				var epsilon = _g3[_g2];
+				++_g2;
+				var lineArray = startHexCoord.hexLineDraw(endHexCoord,offset.add(epsilon));
+				if(visible && Lambda.filter(lineArray,$bind(this,this.isInBounds)).length == lineArray.length) {
+					visible = Lambda.filter(lineArray,$bind(this,this.isSolidAtHexCoord)).length == 0;
+				} else {
+					visible = false;
+				}
+			}
+			if(visible) {
+				return [this.hexMaths.fractionalHexCoordToPixelPos(startHexCoord.convertToFractionalHexCoord().add(offset)),this.hexMaths.fractionalHexCoordToPixelPos(endHexCoord.convertToFractionalHexCoord().add(offset))];
+			}
+		}
+		return [];
 	}
 	,__class__: Level
 };
@@ -8919,6 +9230,7 @@ LevelCreator.prototype = {
 			}
 		}
 		this.addExit();
+		this.addEntrance();
 		var _g11 = 0;
 		var _g4 = flixel_FlxG.random["int"](this.params.minWallNumber,this.params.maxWallNumber);
 		while(_g11 < _g4) {
@@ -8974,6 +9286,15 @@ LevelCreator.prototype = {
 	}
 	,addExit: function() {
 		this.level.getTileAtHexCoord(this.params.exitHex).convertToStairs();
+	}
+	,addEntrance: function() {
+		var _g = 0;
+		var _g1 = [0,1,5];
+		while(_g < _g1.length) {
+			var neighbourIdx = _g1[_g];
+			++_g;
+			this.level.getTileAtHexCoord(this.params.playerStartingHex.hexNeighbour(neighbourIdx)).convertToWall();
+		}
 	}
 	,__class__: LevelCreator
 };
@@ -9069,7 +9390,7 @@ ManifestResources.init = function(config) {
 	var data;
 	var manifest;
 	var library;
-	data = "{\"name\":null,\"assets\":\"aoy4:pathy36:assets%2Fimages%2Fsearchingstate.pngy4:sizei159y4:typey5:IMAGEy2:idR1y7:preloadtgoR0y32:assets%2Fimages%2Fprojectile.pngR2i150R3R4R5R7R6tgoR0y27:assets%2Fimages%2Ffloor.pngR2i277R3R4R5R8R6tgoR0y28:assets%2Fimages%2Fstairs.pngR2i469R3R4R5R9R6tgoR0y31:assets%2Fimages%2Ffullheart.pngR2i259R3R4R5R10R6tgoR0y35:assets%2Fimages%2Foverlaybutton.pngR2i610R3R4R5R11R6tgoR0y26:assets%2Fimages%2Fwall.pngR2i272R3R4R5R12R6tgoR0y28:assets%2Fimages%2Fplayer.pngR2i469R3R4R5R13R6tgoR0y32:assets%2Fimages%2Falertstate.pngR2i131R3R4R5R14R6tgoR0y27:assets%2Fimages%2Fguard.pngR2i465R3R4R5R15R6tgoR0y32:assets%2Fimages%2Femptyheart.pngR2i254R3R4R5R16R6tgoR0y29:assets%2Fimages%2Foverlay.pngR2i267R3R4R5R17R6tgoR2i39706R3y5:MUSICR5y28:flixel%2Fsounds%2Fflixel.mp3y9:pathGroupaR19y28:flixel%2Fsounds%2Fflixel.ogghR6tgoR2i2114R3R18R5y26:flixel%2Fsounds%2Fbeep.mp3R20aR22y26:flixel%2Fsounds%2Fbeep.ogghR6tgoR2i33629R3y5:SOUNDR5R21R20aR19R21hgoR2i5794R3R24R5R23R20aR22R23hgoR2i15744R3y4:FONTy9:classNamey35:__ASSET__flixel_fonts_nokiafc22_ttfR5y30:flixel%2Ffonts%2Fnokiafc22.ttfR6tgoR2i29724R3R25R26y36:__ASSET__flixel_fonts_monsterrat_ttfR5y31:flixel%2Ffonts%2Fmonsterrat.ttfR6tgoR0y33:flixel%2Fimages%2Fui%2Fbutton.pngR2i519R3R4R5R31R6tgoR0y36:flixel%2Fimages%2Flogo%2Fdefault.pngR2i3280R3R4R5R32R6tgh\",\"rootPath\":null,\"version\":2,\"libraryArgs\":[],\"libraryType\":null}";
+	data = "{\"name\":null,\"assets\":\"aoy4:pathy31:assets%2Fimages%2Fdeadstate.pngy4:sizei201y4:typey5:IMAGEy2:idR1y7:preloadtgoR0y36:assets%2Fimages%2Fsearchingstate.pngR2i159R3R4R5R7R6tgoR0y32:assets%2Fimages%2Fprojectile.pngR2i150R3R4R5R8R6tgoR0y27:assets%2Fimages%2Ffloor.pngR2i277R3R4R5R9R6tgoR0y28:assets%2Fimages%2Fstairs.pngR2i469R3R4R5R10R6tgoR0y32:assets%2Fimages%2Fitembutton.pngR2i491R3R4R5R11R6tgoR0y31:assets%2Fimages%2Ffullheart.pngR2i259R3R4R5R12R6tgoR0y35:assets%2Fimages%2Foverlaybutton.pngR2i610R3R4R5R13R6tgoR0y26:assets%2Fimages%2Fwall.pngR2i272R3R4R5R14R6tgoR0y28:assets%2Fimages%2Fplayer.pngR2i469R3R4R5R15R6tgoR0y32:assets%2Fimages%2Falertstate.pngR2i131R3R4R5R16R6tgoR0y27:assets%2Fimages%2Fguard.pngR2i465R3R4R5R17R6tgoR0y32:assets%2Fimages%2Femptyheart.pngR2i254R3R4R5R18R6tgoR0y34:assets%2Fimages%2Fcancelbutton.pngR2i973R3R4R5R19R6tgoR0y29:assets%2Fimages%2Foverlay.pngR2i267R3R4R5R20R6tgoR2i39706R3y5:MUSICR5y28:flixel%2Fsounds%2Fflixel.mp3y9:pathGroupaR22y28:flixel%2Fsounds%2Fflixel.ogghR6tgoR2i2114R3R21R5y26:flixel%2Fsounds%2Fbeep.mp3R23aR25y26:flixel%2Fsounds%2Fbeep.ogghR6tgoR2i33629R3y5:SOUNDR5R24R23aR22R24hgoR2i5794R3R27R5R26R23aR25R26hgoR2i15744R3y4:FONTy9:classNamey35:__ASSET__flixel_fonts_nokiafc22_ttfR5y30:flixel%2Ffonts%2Fnokiafc22.ttfR6tgoR2i29724R3R28R29y36:__ASSET__flixel_fonts_monsterrat_ttfR5y31:flixel%2Ffonts%2Fmonsterrat.ttfR6tgoR0y33:flixel%2Fimages%2Fui%2Fbutton.pngR2i519R3R4R5R34R6tgoR0y36:flixel%2Fimages%2Flogo%2Fdefault.pngR2i3280R3R4R5R35R6tgh\",\"rootPath\":null,\"version\":2,\"libraryArgs\":[],\"libraryType\":null}";
 	manifest = lime_utils_AssetManifest.parse(data,rootPath);
 	library = lime_utils_AssetLibrary.fromManifest(manifest);
 	lime_utils_Assets.registerLibrary("default",library);
@@ -9397,6 +9718,7 @@ MenuState.__super__ = flixel_FlxState;
 MenuState.prototype = $extend(flixel_FlxState.prototype,{
 	create: function() {
 		flixel_FlxState.prototype.create.call(this);
+		flixel_FlxG.mouse.set_useSystemCursor(true);
 		var titleText = new flixel_text_FlxText(0,20,0,"Hopslight",36);
 		titleText.set_borderStyle(flixel_text_FlxTextBorderStyle.SHADOW);
 		titleText.set_borderColor(-8355712);
@@ -9419,6 +9741,32 @@ MenuState.prototype = $extend(flixel_FlxState.prototype,{
 		flixel_FlxState.prototype.update.call(this,elapsed);
 	}
 	,__class__: MenuState
+});
+var OptionOverlay = function(inputNames,inputCallbacks) {
+	this.params = new GameParameters();
+	flixel_group_FlxTypedSpriteGroup.call(this);
+	var background = new flixel_FlxSprite();
+	background.makeGraphic(this.params.screenWidth,this.params.screenHeight,-16777216);
+	background.set_alpha(this.params.overlayAlpha);
+	this.add(background);
+	var _g1 = 0;
+	var _g = inputNames.length;
+	while(_g1 < _g) {
+		var idx = _g1++;
+		var button = new flixel_ui_FlxButton(0,0,inputNames[idx],inputCallbacks[idx]);
+		var middleX = flixel_FlxG.width / 2 - button.get_width() / 2;
+		var middleY = flixel_FlxG.height / 2 - button.get_height() / 2;
+		button.set_x(middleX);
+		button.set_y(middleY + (idx * 2 - inputNames.length + 1.0) * button.get_height());
+		this.add(button);
+	}
+};
+$hxClasses["OptionOverlay"] = OptionOverlay;
+OptionOverlay.__name__ = ["OptionOverlay"];
+OptionOverlay.__super__ = flixel_group_FlxTypedSpriteGroup;
+OptionOverlay.prototype = $extend(flixel_group_FlxTypedSpriteGroup.prototype,{
+	params: null
+	,__class__: OptionOverlay
 });
 var Overlay = function() {
 	this.hexMaths = new HexMaths();
@@ -9526,15 +9874,63 @@ Overlay.prototype = $extend(flixel_group_FlxTypedGroup.prototype,{
 			tile.destroy();
 		}
 		this.tileArray = [];
+		this.moveEnemies(level);
 		var _g11 = 0;
 		var _g2 = this.enemyArray.length;
 		while(_g11 < _g2) {
 			var idx = _g11++;
 			if(this.enemyArray[idx].currentState.name == "patrolling") {
-				this.enemyArray[idx].takeTurn(level,null);
 				this.drawFieldOfView(this.enemyArray[idx],this.colourArray[idx]);
 			}
 		}
+	}
+	,moveEnemies: function(level) {
+		var _gthis = this;
+		var _g = [];
+		var _g2 = 0;
+		var _g1 = this.enemyArray.length;
+		while(_g2 < _g1) {
+			var idx = _g2++;
+			_g.push(idx);
+		}
+		var enemiesYetToMove = _g;
+		enemiesYetToMove = Lambda.array(Lambda.filter(enemiesYetToMove,function(enemyIdx) {
+			return _gthis.enemyArray[enemyIdx].currentState.name == "patrolling";
+		}));
+		var oldArrayLength = 0;
+		while(enemiesYetToMove.length != oldArrayLength) {
+			oldArrayLength = enemiesYetToMove.length;
+			enemiesYetToMove = this.takeTurnPass(enemiesYetToMove,level);
+			if(enemiesYetToMove.length > 0) {
+				enemiesYetToMove = this.takeForcedTurn(enemiesYetToMove,level);
+			}
+		}
+	}
+	,takeTurnPass: function(enemiesYetToMoveInput,level) {
+		var _gthis = this;
+		var takeEnemyTurnFunction = function(enemyIdx) {
+			return !_gthis.enemyArray[enemyIdx].takeTurn(level,null,_gthis.enemyArray);
+		};
+		var enemiesYetToMove = enemiesYetToMoveInput.slice();
+		var oldArrayLength = 0;
+		while(enemiesYetToMove.length != oldArrayLength) {
+			oldArrayLength = enemiesYetToMove.length;
+			enemiesYetToMove = Lambda.array(Lambda.filter(enemiesYetToMove,takeEnemyTurnFunction));
+		}
+		return enemiesYetToMove;
+	}
+	,takeForcedTurn: function(enemiesYetToMoveInput,level) {
+		var enemiesYetToMove = enemiesYetToMoveInput.slice();
+		var _g = 0;
+		while(_g < enemiesYetToMoveInput.length) {
+			var enemyIdx = enemiesYetToMoveInput[_g];
+			++_g;
+			if(this.enemyArray[enemyIdx].takeTurn(level,null,this.enemyArray,true)) {
+				HxOverrides.remove(enemiesYetToMove,enemyIdx);
+				return enemiesYetToMove;
+			}
+		}
+		return enemiesYetToMove;
 	}
 	,drawFieldOfView: function(enemy,colour) {
 		var _g = 0;
@@ -9568,23 +9964,52 @@ PatrollingState.prototype = $extend(CharacterState.prototype,{
 	,hexMaths: null
 	,waypoints: null
 	,goalWaypointIdx: null
-	,takeTurn: function(level,player) {
+	,takeTurn: function(level,player,allEnemies,force) {
+		if(force == null) {
+			force = false;
+		}
 		var _gthis = this;
 		var playerInSight = this.checkForPlayer(player);
 		if(!playerInSight) {
 			var callback = function() {
+				_gthis.checkForDeadEnemies(level,allEnemies);
 				_gthis.checkForPlayer(player);
 			};
 			if(this.character.hexPos.equals(this.waypoints[this.goalWaypointIdx])) {
 				this.incrementGoalIdx();
 			}
-			var pathArray = level.getPath(this.character.hexPos,this.waypoints[this.goalWaypointIdx]);
+			var pathArray = [];
+			if(force) {
+				pathArray = level.getEnemyAwarePath(this.character,allEnemies,this.waypoints[this.goalWaypointIdx]);
+			} else {
+				pathArray = level.getPath(this.character.hexPos,this.waypoints[this.goalWaypointIdx]);
+			}
 			var nextHex = pathArray[1];
-			if(nextHex != null) {
+			if(nextHex == null) {
+				return false;
+			}
+			var isEnemyOnNextHex = function(enemy) {
+				return enemy.hexPos.equals(nextHex);
+			};
+			var enemiesOnNextHex = allEnemies.filter(isEnemyOnNextHex);
+			if(player != null && player.hexPos.equals(nextHex)) {
+				var tmp = this.character.hexPos;
+				var tmp1 = this.character.hexPos.subtract(nextHex);
+				this.character.previousHexPos = tmp.add(tmp1);
+				this.character.updateHexFacing();
+				this.character.updateVisibleHexes(level);
+				(js_Boot.__cast(this.character , Guard)).updateState(new AlertState(player.hexPos));
+				return true;
+			}
+			if(enemiesOnNextHex.length > 0) {
+				return false;
+			} else {
 				this.character.animateMoveToHex(nextHex,callback);
 				this.character.updateVisibleHexes(level);
+				return true;
 			}
 		}
+		return true;
 	}
 	,checkForPlayer: function(player) {
 		var playerInSight = player != null && player.hexPos.isInArray(this.character.visibleHexes);
@@ -9592,6 +10017,23 @@ PatrollingState.prototype = $extend(CharacterState.prototype,{
 			(js_Boot.__cast(this.character , Guard)).updateState(new AlertState(player.hexPos));
 		}
 		return playerInSight;
+	}
+	,checkForDeadEnemies: function(level,enemyArray) {
+		var _g = 0;
+		while(_g < enemyArray.length) {
+			var enemy = enemyArray[_g];
+			++_g;
+			if(enemy.currentState.name == "dead") {
+				var enemyInSight = enemy.hexPos.isInArray(this.character.visibleHexes);
+				if(enemyInSight) {
+					var pathArray = level.getPath(this.character.hexPos,enemy.hexPos);
+					var adjacentHex = pathArray[pathArray.length - 2];
+					(js_Boot.__cast(this.character , Guard)).updateState(new SearchingState(adjacentHex));
+				}
+				return enemyInSight;
+			}
+		}
+		return false;
 	}
 	,incrementGoalIdx: function() {
 		this.goalWaypointIdx += 1;
@@ -9606,6 +10048,19 @@ PatrollingState.prototype = $extend(CharacterState.prototype,{
 		var returnState = new PatrollingState(this.waypoints);
 		returnState.goalWaypointIdx = this.goalWaypointIdx;
 		return returnState;
+	}
+	,updateTargets: function(level) {
+		var _g1 = 0;
+		var _g = this.waypoints.length;
+		while(_g1 < _g) {
+			var idx = _g1++;
+			if(level.isSolidAtHexCoord(this.waypoints[idx])) {
+				var neighbours = level.getReachableHexes(this.waypoints[idx],1,1);
+				if(neighbours.length > 0) {
+					this.waypoints[idx] = flixel_FlxG.random.getObject_HexCoord(neighbours);
+				}
+			}
+		}
 	}
 	,__class__: PatrollingState
 });
@@ -9644,7 +10099,7 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 		flixel_FlxState.prototype.create.call(this);
 	}
 	,update: function(elapsed) {
-		if(this.params.timeBetweenTurns < this.timeSinceLastTurn && !this.playerMovedButGuardsHaveNot) {
+		if(this.params.timeBetweenTurns < this.timeSinceLastTurn && !this.playerMovedButGuardsHaveNot && !this.hud.optionPauseToggle) {
 			var hexClicked = null;
 			if(flixel_FlxG.mouse._leftButton.current == -1 && !this.hud.overlayToggle) {
 				hexClicked = this.hexMaths.pixelPosToFractionalHexCoord(new flixel_math_FlxPoint(flixel_FlxG.mouse.x,flixel_FlxG.mouse.y)).round();
@@ -9653,16 +10108,20 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 				}
 			}
 			if(hexClicked != null) {
-				var playerTakenTurn = this.player.attemptPlayerTurn(this.currentLevel,hexClicked);
+				var playerTakenTurn = this.player.attemptPlayerTurn(this.currentLevel,hexClicked,this.enemyArray,this.hud);
 				if(playerTakenTurn) {
 					this.timeSinceLastTurn = 0.0;
 					this.playerMovedButGuardsHaveNot = true;
 				}
 			}
+			if(this.player.checkIfItemJustUsed()) {
+				this.timeSinceLastTurn = 0.0;
+				this.playerMovedButGuardsHaveNot = true;
+			}
 		} else {
 			this.timeSinceLastTurn += elapsed;
 		}
-		if(this.params.timeBetweenTurns < this.timeSinceLastTurn && this.playerMovedButGuardsHaveNot) {
+		if(this.params.timeBetweenTurns < this.timeSinceLastTurn && this.playerMovedButGuardsHaveNot && !this.hud.optionPauseToggle) {
 			this.takeTurn();
 		}
 		if(this.params.timeBetweenTurns < this.timeSinceLastOverlapUpdate) {
@@ -9683,7 +10142,10 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 			this.guardOverlay.clearOverlay();
 			this.guardOverlay.set_visible(false);
 		}
-		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player);
+		if(this.hud.optionPauseToggle) {
+			this.hud.checkOptionResult();
+		}
+		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player,this.currentLevel,this.enemyArray);
 		if(this.player.currentHealth < 1) {
 			var nextState = new GameOverState();
 			if(flixel_FlxG.game._state.switchTo(nextState)) {
@@ -9702,16 +10164,55 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 			this.createFloor();
 			this.addEnemies();
 			this.player.teleport(this.params.playerStartingHex);
+			this.player.refreshItems();
 			this.add(this.player);
 		} else {
-			var _g = 0;
-			var _g1 = this.enemyArray;
-			while(_g < _g1.length) {
-				var enemy = _g1[_g];
-				++_g;
-				enemy.takeTurn(this.currentLevel,this.player);
+			this.moveEnemies();
+		}
+	}
+	,moveEnemies: function() {
+		var _g = [];
+		var _g2 = 0;
+		var _g1 = this.enemyArray.length;
+		while(_g2 < _g1) {
+			var idx = _g2++;
+			_g.push(idx);
+		}
+		var enemiesYetToMove = _g;
+		var oldArrayLength = 0;
+		while(enemiesYetToMove.length != oldArrayLength) {
+			oldArrayLength = enemiesYetToMove.length;
+			enemiesYetToMove = this.takeTurnPass(enemiesYetToMove);
+			if(enemiesYetToMove.length > 0) {
+				enemiesYetToMove = this.takeForcedTurn(enemiesYetToMove);
 			}
 		}
+	}
+	,takeTurnPass: function(enemiesYetToMoveInput) {
+		var _gthis = this;
+		var takeEnemyTurnFunction = function(enemyIdx) {
+			return !_gthis.enemyArray[enemyIdx].takeTurn(_gthis.currentLevel,_gthis.player,_gthis.enemyArray);
+		};
+		var enemiesYetToMove = enemiesYetToMoveInput.slice();
+		var oldArrayLength = 0;
+		while(enemiesYetToMove.length != oldArrayLength) {
+			oldArrayLength = enemiesYetToMove.length;
+			enemiesYetToMove = Lambda.array(Lambda.filter(enemiesYetToMove,takeEnemyTurnFunction));
+		}
+		return enemiesYetToMove;
+	}
+	,takeForcedTurn: function(enemiesYetToMoveInput) {
+		var enemiesYetToMove = enemiesYetToMoveInput.slice();
+		var _g = 0;
+		while(_g < enemiesYetToMoveInput.length) {
+			var enemyIdx = enemiesYetToMoveInput[_g];
+			++_g;
+			if(this.enemyArray[enemyIdx].takeTurn(this.currentLevel,this.player,this.enemyArray,true)) {
+				HxOverrides.remove(enemiesYetToMove,enemyIdx);
+				return enemiesYetToMove;
+			}
+		}
+		return enemiesYetToMove;
 	}
 	,createFloor: function() {
 		var levelGenerator = new LevelCreator(this.currentFloor);
@@ -9740,9 +10241,9 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 		}
 	}
 	,addHUD: function() {
-		this.hud = new HUD(this.player);
+		this.hud = new HUD(this.player,this.currentLevel,this.enemyArray);
 		this.add(this.hud);
-		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player);
+		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player,this.currentLevel,this.enemyArray);
 	}
 	,addGuardOverlay: function() {
 		this.guardOverlay = new Overlay();
@@ -9769,27 +10270,125 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 	,__class__: PlayState
 });
 var Player = function(hexCoord) {
+	this.itemJustUsed = false;
+	this.items = [];
 	Character.call(this,hexCoord,"assets/images/player.png");
 	this.totalHealth = this.params.startingPlayerHealth;
 	this.currentHealth = this.params.startingPlayerHealth;
+	this.items.push(new StunGun());
+	this.items.push(new WallGenerator());
 };
 $hxClasses["Player"] = Player;
 Player.__name__ = ["Player"];
 Player.__super__ = Character;
 Player.prototype = $extend(Character.prototype,{
-	update: function(elapsed) {
+	items: null
+	,itemJustUsed: null
+	,update: function(elapsed) {
 		Character.prototype.update.call(this,elapsed);
 	}
-	,attemptPlayerTurn: function(level,hexClicked) {
+	,attemptPlayerTurn: function(level,hexClicked,enemyArray,hud) {
 		if(this.hexPos.distanceTo(hexClicked) == 1) {
+			var _g = 0;
+			while(_g < enemyArray.length) {
+				var enemy = enemyArray[_g];
+				++_g;
+				if(enemy.hexPos.equals(hexClicked)) {
+					return false;
+				}
+			}
 			var pixelPos = this.hexMaths.hexCoordToSpritePixelPos(hexClicked);
 			this.setHexPos(hexClicked);
 			flixel_tweens_FlxTween.tween(this,{ x : pixelPos.x, y : pixelPos.y},this.params.timeForTween);
+			this.checkForKnockOutOverlay(enemyArray,hud);
 			return true;
 		}
 		return false;
 	}
+	,checkIfItemJustUsed: function() {
+		if(this.itemJustUsed) {
+			this.itemJustUsed = false;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	,refreshItems: function() {
+		var _g = 0;
+		var _g1 = this.items;
+		while(_g < _g1.length) {
+			var item = _g1[_g];
+			++_g;
+			if(item.uses == 0) {
+				item.uses += 1;
+			}
+		}
+	}
+	,checkForKnockOutOverlay: function(enemyArray,hud) {
+		var _g = 0;
+		while(_g < enemyArray.length) {
+			var enemy = [enemyArray[_g]];
+			++_g;
+			if(enemy[0].isHexBehind(this.hexPos) && this.isHexInFront(enemy[0].hexPos) && enemy[0].currentState.name != "dead") {
+				var resultCallback = (function(enemy1) {
+					return function(result) {
+						if(result == "Incapacitate") {
+							enemy1[0].updateState(new DeadState());
+						}
+					};
+				})(enemy);
+				hud.displayOptionOverlay(["Incapacitate","Leave"],resultCallback);
+			}
+		}
+	}
 	,__class__: Player
+});
+var PositionOverlay = function(inputHexCoords,inputCallbacks) {
+	this.params = new GameParameters();
+	var _gthis = this;
+	flixel_group_FlxTypedSpriteGroup.call(this);
+	var background = new flixel_FlxSprite();
+	background.makeGraphic(this.params.screenWidth,this.params.screenHeight,-16777216);
+	background.set_alpha(this.params.overlayAlpha);
+	this.add(background);
+	var _g1 = 0;
+	var _g = inputHexCoords.length;
+	while(_g1 < _g) {
+		var idx = [_g1++];
+		var hexCoord = inputHexCoords[idx[0]];
+		var tile = new LevelTile(hexCoord.i,hexCoord.j,hexCoord.k);
+		tile.convertToOverlay();
+		tile.set_alpha(this.params.overlayAlpha);
+		var onMouseDown = (function() {
+			return function(inputTile) {
+				inputTile.set_alpha(_gthis.params.overlayMouseDownAlpha);
+			};
+		})();
+		var onMouseUp = (function(idx1) {
+			return function(inputTile1) {
+				inputCallbacks[idx1[0]]();
+			};
+		})(idx);
+		var onMouseOver = (function() {
+			return function(inputTile2) {
+				inputTile2.set_alpha(_gthis.params.overlayMouseOverAlpha);
+			};
+		})();
+		var onMouseOut = (function() {
+			return function(inputTile3) {
+				inputTile3.set_alpha(_gthis.params.overlayAlpha);
+			};
+		})();
+		flixel_input_mouse_FlxMouseEventManager.add(tile,onMouseDown,onMouseUp,onMouseOver,onMouseOut);
+		this.add(tile);
+	}
+};
+$hxClasses["PositionOverlay"] = PositionOverlay;
+PositionOverlay.__name__ = ["PositionOverlay"];
+PositionOverlay.__super__ = flixel_group_FlxTypedSpriteGroup;
+PositionOverlay.prototype = $extend(flixel_group_FlxTypedSpriteGroup.prototype,{
+	params: null
+	,__class__: PositionOverlay
 });
 var PriorityQueue = function() {
 	this.storageArray = [];
@@ -9966,7 +10565,10 @@ SearchingState.prototype = $extend(CharacterState.prototype,{
 	params: null
 	,hexMaths: null
 	,searchTarget: null
-	,takeTurn: function(level,player) {
+	,takeTurn: function(level,player,allEnemies,force) {
+		if(force == null) {
+			force = false;
+		}
 		var _gthis = this;
 		var playerInSight = this.checkForPlayer(player);
 		if(!playerInSight) {
@@ -9976,13 +10578,38 @@ SearchingState.prototype = $extend(CharacterState.prototype,{
 			if(this.character.hexPos.equals(this.searchTarget)) {
 				this.chooseNewSearchTarget(level);
 			}
-			var pathArray = level.getPath(this.character.hexPos,this.searchTarget);
+			var pathArray = [];
+			if(force) {
+				pathArray = level.getEnemyAwarePath(this.character,allEnemies,this.searchTarget);
+			} else {
+				pathArray = level.getPath(this.character.hexPos,this.searchTarget);
+			}
 			var nextHex = pathArray[1];
-			if(nextHex != null) {
+			if(nextHex == null) {
+				return false;
+			}
+			var isEnemyOnNextHex = function(enemy) {
+				return enemy.hexPos.equals(nextHex);
+			};
+			var enemiesOnNextHex = allEnemies.filter(isEnemyOnNextHex);
+			if(player != null && player.hexPos.equals(nextHex)) {
+				var tmp = this.character.hexPos;
+				var tmp1 = this.character.hexPos.subtract(nextHex);
+				this.character.previousHexPos = tmp.add(tmp1);
+				this.character.updateHexFacing();
+				this.character.updateVisibleHexes(level);
+				(js_Boot.__cast(this.character , Guard)).updateState(new AlertState(player.hexPos));
+				return true;
+			}
+			if(enemiesOnNextHex.length > 0) {
+				return false;
+			} else {
 				this.character.animateMoveToHex(nextHex,callback);
 				this.character.updateVisibleHexes(level);
+				return true;
 			}
 		}
+		return true;
 	}
 	,checkForPlayer: function(player) {
 		var playerInSight = player != null && player.hexPos.isInArray(this.character.visibleHexes);
@@ -9999,6 +10626,14 @@ SearchingState.prototype = $extend(CharacterState.prototype,{
 		var nearbyHexes = level.getReachableHexes(this.character.hexPos,2,4);
 		var newSearchTarget = flixel_FlxG.random.getObject_HexCoord(nearbyHexes);
 		this.searchTarget = newSearchTarget;
+	}
+	,updateTargets: function(level) {
+		if(level.isSolidAtHexCoord(this.searchTarget)) {
+			var neighbours = level.getReachableHexes(this.searchTarget,1,1);
+			if(neighbours.length > 0) {
+				this.searchTarget = flixel_FlxG.random.getObject_HexCoord(neighbours);
+			}
+		}
 	}
 	,__class__: SearchingState
 });
@@ -10103,6 +10738,67 @@ StringTools.hex = function(n,digits) {
 	}
 	return s;
 };
+var StunGun = function() {
+	Item.call(this);
+	this.name = "Stun Gun";
+	this.uses = 1;
+};
+$hxClasses["StunGun"] = StunGun;
+StunGun.__name__ = ["StunGun"];
+StunGun.__super__ = Item;
+StunGun.prototype = $extend(Item.prototype,{
+	setup: function(player,level,enemyArray,hud) {
+		var _gthis = this;
+		var potentialHexes = this.potentialHexesInLineOfSight(player);
+		potentialHexes = Lambda.array(Lambda.filter(potentialHexes,function(hexCoord) {
+			return level.testVisibility(player.hexPos,hexCoord);
+		}));
+		hud.displayPositionOverlay(potentialHexes,function(hexCoord1) {
+			var _g = 0;
+			while(_g < enemyArray.length) {
+				var enemy = enemyArray[_g];
+				++_g;
+				if(enemy.hexPos.equals(hexCoord1)) {
+					player.itemJustUsed = true;
+					_gthis.uses -= 1;
+					enemy.updateState(new DeadState());
+				}
+			}
+		});
+	}
+	,potentialHexesInLineOfSight: function(player) {
+		var returnArray = [];
+		var hexPos = player.hexPos;
+		var hexFacing = player.hexFacing;
+		var center = hexPos.hexNeighbour(hexFacing).hexNeighbour(hexFacing).hexNeighbour(hexFacing);
+		var _g = -2;
+		while(_g < 3) {
+			var i = _g++;
+			var _g2 = Math.max(-2,-i - 2) | 0;
+			var _g1 = Math.min(2,-i + 2) + 1 | 0;
+			while(_g2 < _g1) {
+				var j = _g2++;
+				returnArray.push(center.add(new HexCoord(i,j,-i - j)));
+			}
+		}
+		if(hexFacing - 1 < 0) {
+			returnArray.push(hexPos.hexNeighbour(5));
+			returnArray.push(hexPos.hexNeighbour(5).hexNeighbour(5));
+		} else {
+			returnArray.push(hexPos.hexNeighbour(hexFacing - 1));
+			returnArray.push(hexPos.hexNeighbour(hexFacing - 1).hexNeighbour(hexFacing - 1));
+		}
+		if(5 < hexFacing + 1) {
+			returnArray.push(hexPos.hexNeighbour(0));
+			returnArray.push(hexPos.hexNeighbour(0).hexNeighbour(0));
+		} else {
+			returnArray.push(hexPos.hexNeighbour(hexFacing + 1));
+			returnArray.push(hexPos.hexNeighbour(hexFacing + 1).hexNeighbour(hexFacing + 1));
+		}
+		return returnArray;
+	}
+	,__class__: StunGun
+});
 var ValueType = $hxClasses["ValueType"] = { __ename__ : ["ValueType"], __constructs__ : ["TNull","TInt","TFloat","TBool","TObject","TFunction","TClass","TEnum","TUnknown"] };
 ValueType.TNull = ["TNull",0];
 ValueType.TNull.toString = $estr;
@@ -10320,6 +11016,46 @@ _$UInt_UInt_$Impl_$.toFloat = function(this1) {
 		return $int + 0.0;
 	}
 };
+var WallGenerator = function() {
+	Item.call(this);
+	this.name = "Pop-up Wall";
+	this.uses = 1;
+};
+$hxClasses["WallGenerator"] = WallGenerator;
+WallGenerator.__name__ = ["WallGenerator"];
+WallGenerator.__super__ = Item;
+WallGenerator.prototype = $extend(Item.prototype,{
+	setup: function(player,level,enemyArray,hud) {
+		var _gthis = this;
+		var neighbours = Lambda.filter(player.hexPos.returnNeighbours(),$bind(level,level.isInBounds));
+		neighbours = Lambda.filter(neighbours,function(hexCoord) {
+			return !level.isSolidAtHexCoord(hexCoord);
+		});
+		neighbours = Lambda.filter(neighbours,function(hexCoord1) {
+			var _g = 0;
+			while(_g < enemyArray.length) {
+				var enemy = enemyArray[_g];
+				++_g;
+				if(enemy.hexPos.equals(hexCoord1)) {
+					return false;
+				}
+			}
+			return true;
+		});
+		hud.displayPositionOverlay(Lambda.array(neighbours),function(hexCoord2) {
+			player.itemJustUsed = true;
+			_gthis.uses -= 1;
+			level.getTileAtHexCoord(hexCoord2).convertToWall();
+			var _g1 = 0;
+			while(_g1 < enemyArray.length) {
+				var enemy1 = enemyArray[_g1];
+				++_g1;
+				enemy1.currentState.updateTargets(level);
+			}
+		});
+	}
+	,__class__: WallGenerator
+});
 var Xml = function(nodeType) {
 	this.nodeType = nodeType;
 	this.children = [];
@@ -27066,6 +27802,517 @@ flixel_input_mouse_FlxMouseButton.prototype = $extend(flixel_input_FlxInput.prot
 	}
 	,__class__: flixel_input_mouse_FlxMouseButton
 });
+var flixel_input_mouse_FlxMouseEventManager = function() {
+	flixel_FlxBasic.call(this);
+	if(flixel_input_mouse_FlxMouseEventManager._registeredObjects != null) {
+		this.clearRegistry();
+	}
+	flixel_input_mouse_FlxMouseEventManager._registeredObjects = [];
+	flixel_input_mouse_FlxMouseEventManager._mouseOverObjects = [];
+	flixel_input_mouse_FlxMouseEventManager._mouseDownObjects = [];
+	flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects = [];
+	flixel_FlxG.signals.stateSwitched.add(flixel_input_mouse_FlxMouseEventManager.removeAll);
+};
+$hxClasses["flixel.input.mouse.FlxMouseEventManager"] = flixel_input_mouse_FlxMouseEventManager;
+flixel_input_mouse_FlxMouseEventManager.__name__ = ["flixel","input","mouse","FlxMouseEventManager"];
+flixel_input_mouse_FlxMouseEventManager.init = function() {
+	if(flixel_FlxG.plugins.get(flixel_input_mouse_FlxMouseEventManager) == null) {
+		flixel_FlxG.plugins.add_flixel_input_mouse_FlxMouseEventManager(new flixel_input_mouse_FlxMouseEventManager());
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.add = function(Object,OnMouseDown,OnMouseUp,OnMouseOver,OnMouseOut,MouseChildren,MouseEnabled,PixelPerfect,MouseButtons) {
+	if(PixelPerfect == null) {
+		PixelPerfect = true;
+	}
+	if(MouseEnabled == null) {
+		MouseEnabled = true;
+	}
+	if(MouseChildren == null) {
+		MouseChildren = false;
+	}
+	if(flixel_FlxG.plugins.get(flixel_input_mouse_FlxMouseEventManager) == null) {
+		flixel_FlxG.plugins.add_flixel_input_mouse_FlxMouseEventManager(new flixel_input_mouse_FlxMouseEventManager());
+	}
+	var newReg = new flixel_input_mouse__$FlxMouseEventManager_ObjectMouseData(Object,OnMouseDown,OnMouseUp,OnMouseOver,OnMouseOut,MouseChildren,MouseEnabled,PixelPerfect,MouseButtons);
+	if(js_Boot.__instanceof(Object,flixel_FlxSprite)) {
+		newReg.sprite = Object;
+	}
+	if(!MouseChildren) {
+		flixel_input_mouse_FlxMouseEventManager._registeredObjects.unshift(newReg);
+	} else {
+		var index = 0;
+		while(index < flixel_input_mouse_FlxMouseEventManager._registeredObjects.length && !flixel_input_mouse_FlxMouseEventManager._registeredObjects[index].mouseChildren) ++index;
+		flixel_input_mouse_FlxMouseEventManager._registeredObjects.splice(index,0,newReg);
+	}
+	return Object;
+};
+flixel_input_mouse_FlxMouseEventManager.remove = function(Object) {
+	var _g = 0;
+	var _g1 = flixel_input_mouse_FlxMouseEventManager._registeredObjects;
+	while(_g < _g1.length) {
+		var reg = _g1[_g];
+		++_g;
+		if(reg.object == Object) {
+			reg.destroy();
+			HxOverrides.remove(flixel_input_mouse_FlxMouseEventManager._registeredObjects,reg);
+		}
+	}
+	return Object;
+};
+flixel_input_mouse_FlxMouseEventManager.removeAll = function() {
+	if(flixel_input_mouse_FlxMouseEventManager._registeredObjects != null) {
+		var _g = 0;
+		var _g1 = flixel_input_mouse_FlxMouseEventManager._registeredObjects;
+		while(_g < _g1.length) {
+			var reg = _g1[_g];
+			++_g;
+			reg.destroy();
+		}
+	}
+	flixel_input_mouse_FlxMouseEventManager._registeredObjects.splice(0,flixel_input_mouse_FlxMouseEventManager._registeredObjects.length);
+	flixel_input_mouse_FlxMouseEventManager._mouseOverObjects = [];
+	flixel_input_mouse_FlxMouseEventManager._mouseDownObjects = [];
+	flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects = [];
+};
+flixel_input_mouse_FlxMouseEventManager.reorder = function() {
+	var orderedObjects = [];
+	flixel_input_mouse_FlxMouseEventManager.traverseFlxGroup(flixel_FlxG.game._state,orderedObjects);
+	orderedObjects.reverse();
+	flixel_input_mouse_FlxMouseEventManager._registeredObjects = orderedObjects;
+	haxe_ds_ArraySort.sort(flixel_input_mouse_FlxMouseEventManager._registeredObjects,flixel_input_mouse_FlxMouseEventManager.sortByMouseChildren);
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseDownCallback = function(Object,OnMouseDown) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseDown = OnMouseDown;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseUpCallback = function(Object,OnMouseUp) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseUp = OnMouseUp;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseClickCallback = function(Object,OnMouseClick) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseClick = OnMouseClick;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseDoubleClickCallback = function(Object,OnMouseDoubleClick) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseDoubleClick = OnMouseDoubleClick;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseOverCallback = function(Object,OnMouseOver) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseOver = OnMouseOver;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseOutCallback = function(Object,OnMouseOut) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseOut = OnMouseOut;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseMoveCallback = function(Object,OnMouseMove) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseMove = OnMouseMove;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setMouseWheelCallback = function(Object,OnMouseWheel) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.onMouseWheel = OnMouseWheel;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setObjectMouseEnabled = function(Object,MouseEnabled) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.mouseEnabled = MouseEnabled;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.isObjectMouseEnabled = function(Object) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		return reg.mouseEnabled;
+	} else {
+		return false;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setObjectMouseChildren = function(Object,MouseChildren) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		reg.mouseChildren = MouseChildren;
+		HxOverrides.remove(flixel_input_mouse_FlxMouseEventManager._registeredObjects,reg);
+		if(!MouseChildren) {
+			flixel_input_mouse_FlxMouseEventManager._registeredObjects.unshift(reg);
+		} else {
+			var index = 0;
+			while(index < flixel_input_mouse_FlxMouseEventManager._registeredObjects.length && !flixel_input_mouse_FlxMouseEventManager._registeredObjects[index].mouseChildren) ++index;
+			flixel_input_mouse_FlxMouseEventManager._registeredObjects.splice(index,0,reg);
+		}
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.isObjectMouseChildren = function(Object) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(Object);
+	if(reg != null) {
+		return reg.mouseChildren;
+	} else {
+		throw new js__$Boot_HaxeError(new openfl_errors_Error("FlxMouseEventManager , isObjectMouseChildren() : object not found"));
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.setObjectMouseButtons = function(object,mouseButtons) {
+	var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(object);
+	if(reg != null) {
+		reg.mouseButtons = mouseButtons;
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.traverseFlxGroup = function(Group,OrderedObjects) {
+	var _g = 0;
+	var _g1 = Group.members;
+	while(_g < _g1.length) {
+		var basic = _g1[_g];
+		++_g;
+		var group = flixel_group_FlxTypedGroup.resolveGroup(basic);
+		if(group != null) {
+			flixel_input_mouse_FlxMouseEventManager.traverseFlxGroup(group,OrderedObjects);
+		}
+		if(js_Boot.__instanceof(basic,flixel_FlxObject)) {
+			var reg = flixel_input_mouse_FlxMouseEventManager.getRegister(basic);
+			if(reg != null) {
+				OrderedObjects.push(reg);
+			}
+		}
+	}
+};
+flixel_input_mouse_FlxMouseEventManager.getRegister = function(Object,Register) {
+	if(Register == null) {
+		Register = flixel_input_mouse_FlxMouseEventManager._registeredObjects;
+	}
+	var _g = 0;
+	while(_g < Register.length) {
+		var reg = Register[_g];
+		++_g;
+		if(reg.object == Object) {
+			return reg;
+		}
+	}
+	return null;
+};
+flixel_input_mouse_FlxMouseEventManager.sortByMouseChildren = function(reg1,reg2) {
+	if(reg1.mouseChildren == reg2.mouseChildren) {
+		return 0;
+	}
+	if(!reg1.mouseChildren) {
+		return -1;
+	}
+	return 1;
+};
+flixel_input_mouse_FlxMouseEventManager.__super__ = flixel_FlxBasic;
+flixel_input_mouse_FlxMouseEventManager.prototype = $extend(flixel_FlxBasic.prototype,{
+	destroy: function() {
+		this.clearRegistry();
+		flixel_input_mouse_FlxMouseEventManager._point = flixel_util_FlxDestroyUtil.put(flixel_input_mouse_FlxMouseEventManager._point);
+		flixel_FlxG.signals.stateSwitched.remove(flixel_input_mouse_FlxMouseEventManager.removeAll);
+		flixel_FlxBasic.prototype.destroy.call(this);
+	}
+	,update: function(elapsed) {
+		flixel_FlxBasic.prototype.update.call(this,elapsed);
+		var currentOverObjects = [];
+		var _g = 0;
+		var _g1 = flixel_input_mouse_FlxMouseEventManager._registeredObjects;
+		while(_g < _g1.length) {
+			var reg = _g1[_g];
+			++_g;
+			if(!reg.object.alive || !reg.object.exists || !reg.object.visible || !reg.mouseEnabled) {
+				continue;
+			}
+			if(this.checkOverlap(reg)) {
+				currentOverObjects.push(reg);
+				if(!reg.mouseChildren) {
+					break;
+				}
+			}
+		}
+		var _g2 = 0;
+		var _g11 = flixel_input_mouse_FlxMouseEventManager._mouseOverObjects;
+		while(_g2 < _g11.length) {
+			var over = _g11[_g2];
+			++_g2;
+			if(over.onMouseOut != null) {
+				if(!over.object.exists || !over.object.visible || flixel_input_mouse_FlxMouseEventManager.getRegister(over.object,currentOverObjects) == null) {
+					over.onMouseOut(over.object);
+				}
+			}
+		}
+		var _g3 = 0;
+		while(_g3 < currentOverObjects.length) {
+			var current = currentOverObjects[_g3];
+			++_g3;
+			if(current.onMouseOver != null) {
+				if(current.object.exists && current.object.visible && flixel_input_mouse_FlxMouseEventManager.getRegister(current.object,flixel_input_mouse_FlxMouseEventManager._mouseOverObjects) == null) {
+					current.onMouseOver(current.object);
+				}
+			}
+		}
+		var _this = flixel_FlxG.mouse;
+		if(_this._prevX != _this.x || _this._prevY != _this.y) {
+			var _g4 = 0;
+			while(_g4 < currentOverObjects.length) {
+				var current1 = currentOverObjects[_g4];
+				++_g4;
+				if(current1.onMouseMove != null && current1.object.exists && current1.object.visible) {
+					current1.onMouseMove(current1.object);
+				}
+			}
+		}
+		var _g5 = 0;
+		while(_g5 < currentOverObjects.length) {
+			var current2 = currentOverObjects[_g5];
+			++_g5;
+			if(current2.onMouseDown != null && current2.object.exists && current2.object.visible) {
+				var _g12 = 0;
+				var _g21 = current2.mouseButtons;
+				while(_g12 < _g21.length) {
+					var buttonID = _g21[_g12];
+					++_g12;
+					if(flixel_input_mouse_FlxMouseButton.getByID(buttonID).current == 2) {
+						current2.onMouseDown(current2.object);
+					}
+				}
+			}
+		}
+		if(flixel_FlxG.mouse._leftButton.current == 2) {
+			var _g6 = 0;
+			while(_g6 < currentOverObjects.length) {
+				var current3 = currentOverObjects[_g6];
+				++_g6;
+				if((current3.onMouseClick != null || current3.onMouseDoubleClick != null) && current3.object.exists && current3.object.visible) {
+					flixel_input_mouse_FlxMouseEventManager._mouseDownObjects.push(current3);
+				}
+			}
+		}
+		var _g7 = 0;
+		while(_g7 < currentOverObjects.length) {
+			var current4 = currentOverObjects[_g7];
+			++_g7;
+			if(current4.onMouseUp != null && current4.object.exists && current4.object.visible) {
+				var _g13 = 0;
+				var _g22 = current4.mouseButtons;
+				while(_g13 < _g22.length) {
+					var buttonID1 = _g22[_g13];
+					++_g13;
+					if(flixel_input_mouse_FlxMouseButton.getByID(buttonID1).current == -1) {
+						current4.onMouseUp(current4.object);
+					}
+				}
+			}
+		}
+		if(flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects.length > 0 && flixel_FlxG.game.ticks - flixel_input_mouse_FlxMouseEventManager._mouseClickedTime > flixel_input_mouse_FlxMouseEventManager.maxDoubleClickDelay) {
+			flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects = [];
+		}
+		if(flixel_FlxG.mouse._leftButton.current == -1) {
+			flixel_input_mouse_FlxMouseEventManager._mouseClickedTime = flixel_FlxG.game.ticks;
+			var previousClickedObjects = flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects;
+			if(flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects.length > 0) {
+				flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects = [];
+			}
+			var _g8 = 0;
+			var _g14 = flixel_input_mouse_FlxMouseEventManager._mouseDownObjects;
+			while(_g8 < _g14.length) {
+				var down = _g14[_g8];
+				++_g8;
+				if(down.object != null && down.object.exists && down.object.visible && flixel_input_mouse_FlxMouseEventManager.getRegister(down.object,currentOverObjects) != null) {
+					if(down.onMouseClick != null) {
+						down.onMouseClick(down.object);
+					}
+					if(down.onMouseDoubleClick != null) {
+						if(flixel_input_mouse_FlxMouseEventManager.getRegister(down.object,previousClickedObjects) != null) {
+							down.onMouseDoubleClick(down.object);
+						} else {
+							flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects.push(down);
+						}
+					}
+				}
+			}
+		}
+		var tmp;
+		if(flixel_input_mouse_FlxMouseEventManager._mouseDownObjects.length > 0) {
+			var _this1 = flixel_FlxG.mouse._leftButton;
+			tmp = !(_this1.current == 1 || _this1.current == 2);
+		} else {
+			tmp = false;
+		}
+		if(tmp) {
+			flixel_input_mouse_FlxMouseEventManager._mouseDownObjects = [];
+		}
+		if(flixel_FlxG.mouse.wheel != 0) {
+			var _g9 = 0;
+			while(_g9 < currentOverObjects.length) {
+				var current5 = currentOverObjects[_g9];
+				++_g9;
+				if(current5.onMouseWheel != null && current5.object.exists && current5.object.visible) {
+					current5.onMouseWheel(current5.object);
+				}
+			}
+		}
+		flixel_input_mouse_FlxMouseEventManager._mouseOverObjects = currentOverObjects;
+	}
+	,clearRegistry: function() {
+		flixel_input_mouse_FlxMouseEventManager._mouseOverObjects = null;
+		flixel_input_mouse_FlxMouseEventManager._mouseDownObjects = null;
+		flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects = null;
+		flixel_input_mouse_FlxMouseEventManager._registeredObjects = flixel_util_FlxDestroyUtil.destroyArray(flixel_input_mouse_FlxMouseEventManager._registeredObjects);
+	}
+	,checkOverlap: function(Register) {
+		var _g = 0;
+		var _g1 = Register.object.get_cameras();
+		while(_g < _g1.length) {
+			var camera = _g1[_g];
+			++_g;
+			flixel_input_mouse_FlxMouseEventManager._point = flixel_FlxG.mouse.getPositionInCameraView(camera,flixel_input_mouse_FlxMouseEventManager._point);
+			var point = flixel_input_mouse_FlxMouseEventManager._point;
+			if(point.x > camera.viewOffsetX && point.x < camera.viewOffsetWidth && point.y > camera.viewOffsetY && point.y < camera.viewOffsetHeight) {
+				flixel_input_mouse_FlxMouseEventManager._point = flixel_FlxG.mouse.getWorldPosition(camera,flixel_input_mouse_FlxMouseEventManager._point);
+				var Point = flixel_input_mouse_FlxMouseEventManager._point;
+				var tmp;
+				if(Register.pixelPerfect && Register.sprite != null) {
+					var Sprite = Register.sprite;
+					if(Sprite.angle != 0) {
+						var X = Sprite.x + Sprite.origin.x - Sprite.offset.x;
+						var Y = Sprite.y + Sprite.origin.y - Sprite.offset.y;
+						var point1 = flixel_math_FlxPoint._pool.get().set(X,Y);
+						point1._inPool = false;
+						var point2 = point1;
+						point2._weak = true;
+						var pivot = point2;
+						Point.rotate(pivot,-Sprite.angle);
+					}
+					tmp = Sprite.pixelsOverlapPoint(Point,1,camera);
+				} else {
+					tmp = Register.object.overlapsPoint(Point,true,camera);
+				}
+				if(tmp) {
+					return true;
+				}
+			}
+			var _g2 = 0;
+			var _g3 = flixel_FlxG.touches.list;
+			while(_g2 < _g3.length) {
+				var touch = _g3[_g2];
+				++_g2;
+				flixel_input_mouse_FlxMouseEventManager._point = touch.getPositionInCameraView(camera,flixel_input_mouse_FlxMouseEventManager._point);
+				var point3 = flixel_input_mouse_FlxMouseEventManager._point;
+				if(point3.x > camera.viewOffsetX && point3.x < camera.viewOffsetWidth && point3.y > camera.viewOffsetY && point3.y < camera.viewOffsetHeight) {
+					flixel_input_mouse_FlxMouseEventManager._point = touch.getWorldPosition(camera,flixel_input_mouse_FlxMouseEventManager._point);
+					var Point1 = flixel_input_mouse_FlxMouseEventManager._point;
+					var tmp1;
+					if(Register.pixelPerfect && Register.sprite != null) {
+						var Sprite1 = Register.sprite;
+						if(Sprite1.angle != 0) {
+							var X1 = Sprite1.x + Sprite1.origin.x - Sprite1.offset.x;
+							var Y1 = Sprite1.y + Sprite1.origin.y - Sprite1.offset.y;
+							var point4 = flixel_math_FlxPoint._pool.get().set(X1,Y1);
+							point4._inPool = false;
+							var point5 = point4;
+							point5._weak = true;
+							var pivot1 = point5;
+							Point1.rotate(pivot1,-Sprite1.angle);
+						}
+						tmp1 = Sprite1.pixelsOverlapPoint(Point1,1,camera);
+					} else {
+						tmp1 = Register.object.overlapsPoint(Point1,true,camera);
+					}
+					if(tmp1) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+	,checkOverlapWithPoint: function(Register,Point,Camera) {
+		if(Register.pixelPerfect && Register.sprite != null) {
+			var Sprite = Register.sprite;
+			if(Sprite.angle != 0) {
+				var X = Sprite.x + Sprite.origin.x - Sprite.offset.x;
+				var Y = Sprite.y + Sprite.origin.y - Sprite.offset.y;
+				var point = flixel_math_FlxPoint._pool.get().set(X,Y);
+				point._inPool = false;
+				var point1 = point;
+				point1._weak = true;
+				var pivot = point1;
+				Point.rotate(pivot,-Sprite.angle);
+			}
+			return Sprite.pixelsOverlapPoint(Point,1,Camera);
+		} else {
+			return Register.object.overlapsPoint(Point,true,Camera);
+		}
+	}
+	,checkPixelPerfectOverlap: function(Point,Sprite,Camera) {
+		if(Sprite.angle != 0) {
+			var X = Sprite.x + Sprite.origin.x - Sprite.offset.x;
+			var Y = Sprite.y + Sprite.origin.y - Sprite.offset.y;
+			var point = flixel_math_FlxPoint._pool.get().set(X,Y);
+			point._inPool = false;
+			var point1 = point;
+			point1._weak = true;
+			var pivot = point1;
+			Point.rotate(pivot,-Sprite.angle);
+		}
+		return Sprite.pixelsOverlapPoint(Point,1,Camera);
+	}
+	,__class__: flixel_input_mouse_FlxMouseEventManager
+});
+var flixel_input_mouse__$FlxMouseEventManager_ObjectMouseData = function(object,onMouseDown,onMouseUp,onMouseOver,onMouseOut,mouseChildren,mouseEnabled,pixelPerfect,mouseButtons) {
+	this.object = object;
+	this.onMouseDown = onMouseDown;
+	this.onMouseUp = onMouseUp;
+	this.onMouseOver = onMouseOver;
+	this.onMouseOut = onMouseOut;
+	this.mouseChildren = mouseChildren;
+	this.mouseEnabled = mouseEnabled;
+	this.pixelPerfect = pixelPerfect;
+	this.mouseButtons = mouseButtons == null ? [-1] : mouseButtons;
+};
+$hxClasses["flixel.input.mouse._FlxMouseEventManager.ObjectMouseData"] = flixel_input_mouse__$FlxMouseEventManager_ObjectMouseData;
+flixel_input_mouse__$FlxMouseEventManager_ObjectMouseData.__name__ = ["flixel","input","mouse","_FlxMouseEventManager","ObjectMouseData"];
+flixel_input_mouse__$FlxMouseEventManager_ObjectMouseData.__interfaces__ = [flixel_util_IFlxDestroyable];
+flixel_input_mouse__$FlxMouseEventManager_ObjectMouseData.prototype = {
+	object: null
+	,onMouseDown: null
+	,onMouseUp: null
+	,onMouseClick: null
+	,onMouseDoubleClick: null
+	,onMouseOver: null
+	,onMouseOut: null
+	,onMouseMove: null
+	,onMouseWheel: null
+	,mouseChildren: null
+	,mouseEnabled: null
+	,pixelPerfect: null
+	,sprite: null
+	,mouseButtons: null
+	,currentMouseButton: null
+	,destroy: function() {
+		this.object = null;
+		this.sprite = null;
+		this.onMouseDown = null;
+		this.onMouseUp = null;
+		this.onMouseClick = null;
+		this.onMouseDoubleClick = null;
+		this.onMouseOver = null;
+		this.onMouseOut = null;
+		this.onMouseMove = null;
+		this.onMouseWheel = null;
+		this.mouseButtons = null;
+	}
+	,__class__: flixel_input_mouse__$FlxMouseEventManager_ObjectMouseData
+};
 var flixel_input_touch_FlxTouch = function(x,y,pointID) {
 	if(pointID == null) {
 		pointID = 0;
@@ -34582,7 +35829,20 @@ var flixel_system_frontEnds_PluginFrontEnd = function() {
 $hxClasses["flixel.system.frontEnds.PluginFrontEnd"] = flixel_system_frontEnds_PluginFrontEnd;
 flixel_system_frontEnds_PluginFrontEnd.__name__ = ["flixel","system","frontEnds","PluginFrontEnd"];
 flixel_system_frontEnds_PluginFrontEnd.prototype = {
-	add_flixel_tweens_FlxTweenManager: function(Plugin) {
+	add_flixel_input_mouse_FlxMouseEventManager: function(Plugin) {
+		var _g = 0;
+		var _g1 = this.list;
+		while(_g < _g1.length) {
+			var plugin = _g1[_g];
+			++_g;
+			if(flixel_util_FlxStringUtil.getClassName(Plugin,true) == flixel_util_FlxStringUtil.getClassName(plugin,true)) {
+				return Plugin;
+			}
+		}
+		this.list.push(Plugin);
+		return Plugin;
+	}
+	,add_flixel_tweens_FlxTweenManager: function(Plugin) {
 		var _g = 0;
 		var _g1 = this.list;
 		while(_g < _g1.length) {
@@ -90962,7 +92222,7 @@ var openfl_display_DOMRenderer = function(element) {
 		  var styles = window.getComputedStyle(document.documentElement, ''),
 			pre = (Array.prototype.slice
 			  .call(styles)
-			  .join('')
+			  .join('') 
 			  .match(/-(moz|webkit|ms)-/) || (styles.OLink === '' && ['', 'o'])
 			)[1],
 			dom = ('WebKit|Moz|MS|O').match(new RegExp('(' + pre + ')', 'i'))[1];
@@ -108153,10 +109413,12 @@ openfl_display_DisplayObject.__tempStack = new lime_utils_ObjectPool(function() 
 },function(stack) {
 	stack.set_length(0);
 });
+AssetPaths.deadstate__png = "assets/images/deadstate.png";
 AssetPaths.searchingstate__png = "assets/images/searchingstate.png";
 AssetPaths.projectile__png = "assets/images/projectile.png";
 AssetPaths.floor__png = "assets/images/floor.png";
 AssetPaths.stairs__png = "assets/images/stairs.png";
+AssetPaths.itembutton__png = "assets/images/itembutton.png";
 AssetPaths.fullheart__png = "assets/images/fullheart.png";
 AssetPaths.overlaybutton__png = "assets/images/overlaybutton.png";
 AssetPaths.wall__png = "assets/images/wall.png";
@@ -108164,6 +109426,7 @@ AssetPaths.player__png = "assets/images/player.png";
 AssetPaths.alertstate__png = "assets/images/alertstate.png";
 AssetPaths.guard__png = "assets/images/guard.png";
 AssetPaths.emptyheart__png = "assets/images/emptyheart.png";
+AssetPaths.cancelbutton__png = "assets/images/cancelbutton.png";
 AssetPaths.overlay__png = "assets/images/overlay.png";
 flixel_math_FlxRect._pool = new flixel_util_FlxPool_$flixel_$math_$FlxRect(flixel_math_FlxRect);
 flixel_FlxObject.defaultPixelPerfectPosition = false;
@@ -109497,6 +110760,19 @@ openfl_display_BitmapData.__supportsBGRA = null;
 openfl_display_BitmapData.__tempVector = new lime_math_Vector2();
 flixel_input_mouse__$FlxMouse_GraphicCursor.resourceType = "image/png";
 flixel_input_mouse__$FlxMouse_GraphicCursor.resourceName = "__ASSET__:bitmap_flixel_input_mouse__FlxMouse_GraphicCursor";
+flixel_input_mouse_FlxMouseEventManager._registeredObjects = [];
+flixel_input_mouse_FlxMouseEventManager._mouseOverObjects = [];
+flixel_input_mouse_FlxMouseEventManager._mouseDownObjects = [];
+flixel_input_mouse_FlxMouseEventManager._mouseClickedObjects = [];
+flixel_input_mouse_FlxMouseEventManager._mouseClickedTime = -1;
+flixel_input_mouse_FlxMouseEventManager._point = (function($this) {
+	var $r;
+	var point = flixel_math_FlxPoint._pool.get().set(0,0);
+	point._inPool = false;
+	$r = point;
+	return $r;
+}(this));
+flixel_input_mouse_FlxMouseEventManager.maxDoubleClickDelay = 500;
 flixel_input_touch_FlxTouchManager.maxTouchPoints = 0;
 flixel_math_FlxMath.MIN_VALUE_FLOAT = 0.0000000000000001;
 flixel_math_FlxMath.MAX_VALUE_FLOAT = 1.79e+308;
