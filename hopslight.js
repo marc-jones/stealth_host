@@ -920,9 +920,9 @@ ApplicationMain.create = function(config) {
 	ManifestResources.init(config);
 	var _this = app.meta;
 	if(__map_reserved["build"] != null) {
-		_this.setReserved("build","72");
+		_this.setReserved("build","74");
 	} else {
-		_this.h["build"] = "72";
+		_this.h["build"] = "74";
 	}
 	var _this1 = app.meta;
 	if(__map_reserved["company"] != null) {
@@ -4228,6 +4228,67 @@ DocumentClass.prototype = $extend(Main.prototype,{
 var AssetPaths = function() { };
 $hxClasses["AssetPaths"] = AssetPaths;
 AssetPaths.__name__ = ["AssetPaths"];
+var Item = function() {
+};
+$hxClasses["Item"] = Item;
+Item.__name__ = ["Item"];
+Item.prototype = {
+	name: null
+	,uses: null
+	,setup: function(player,level,enemyArray,hud,playState) {
+	}
+	,__class__: Item
+};
+var Blink = function() {
+	Item.call(this);
+	this.name = "Blink";
+	this.uses = 1;
+};
+$hxClasses["Blink"] = Blink;
+Blink.__name__ = ["Blink"];
+Blink.__super__ = Item;
+Blink.prototype = $extend(Item.prototype,{
+	setup: function(player,level,enemyArray,hud,playState) {
+		var _gthis = this;
+		var correctHexDirection = function(hexDir) {
+			var outHexDir = hexDir;
+			if(5 < outHexDir) {
+				outHexDir -= 6;
+			}
+			if(outHexDir < 0) {
+				outHexDir += 6;
+			}
+			return outHexDir;
+		};
+		var frontHex = player.hexPos.hexNeighbour(player.hexFacing);
+		var potentialHexes = frontHex.hexNeighbour(player.hexFacing);
+		var potentialHexes1 = correctHexDirection(player.hexFacing - 1);
+		var potentialHexes2 = frontHex.hexNeighbour(potentialHexes1);
+		var potentialHexes3 = correctHexDirection(player.hexFacing + 1);
+		var potentialHexes4 = [potentialHexes,potentialHexes2,frontHex.hexNeighbour(potentialHexes3)];
+		potentialHexes4 = Lambda.array(Lambda.filter(potentialHexes4,$bind(level,level.isInBounds)));
+		potentialHexes4 = Lambda.array(Lambda.filter(potentialHexes4,function(hexCoord) {
+			return !level.isSolidAtHexCoord(hexCoord);
+		}));
+		potentialHexes4 = Lambda.array(Lambda.filter(potentialHexes4,function(hexCoord1) {
+			var _g = 0;
+			while(_g < enemyArray.length) {
+				var enemy = enemyArray[_g];
+				++_g;
+				if(enemy.hexPos.equals(hexCoord1)) {
+					return false;
+				}
+			}
+			return true;
+		}));
+		hud.displayPositionOverlay(potentialHexes4,function(hexCoord2) {
+			player.itemJustUsed = true;
+			_gthis.uses -= 1;
+			player.teleport(hexCoord2,frontHex);
+		});
+	}
+	,__class__: Blink
+});
 var flixel_util_IFlxDestroyable = function() { };
 $hxClasses["flixel.util.IFlxDestroyable"] = flixel_util_IFlxDestroyable;
 flixel_util_IFlxDestroyable.__name__ = ["flixel","util","IFlxDestroyable"];
@@ -8521,7 +8582,7 @@ Guard.prototype = $extend(Character.prototype,{
 	}
 	,__class__: Guard
 });
-var HUD = function(playerInput,levelInput,enemyArrayInput) {
+var HUD = function(playerInput,levelInput,enemyArrayInput,playStateInput) {
 	this.optionPauseToggle = false;
 	this.overlayToggle = false;
 	this.params = new GameParameters();
@@ -8549,6 +8610,7 @@ var HUD = function(playerInput,levelInput,enemyArrayInput) {
 	this.player = playerInput;
 	this.currentLevel = levelInput;
 	this.enemyArray = enemyArrayInput;
+	this.playState = playStateInput;
 	this.setupHealth();
 };
 $hxClasses["HUD"] = HUD;
@@ -8570,6 +8632,7 @@ HUD.prototype = $extend(flixel_group_FlxTypedGroup.prototype,{
 	,player: null
 	,currentLevel: null
 	,enemyArray: null
+	,playState: null
 	,cancelButton: null
 	,itemSelectionCallback: function() {
 		var _gthis = this;
@@ -8591,19 +8654,20 @@ HUD.prototype = $extend(flixel_group_FlxTypedGroup.prototype,{
 					var item1 = _g11[_g2];
 					++_g2;
 					if(item1.name == inputName) {
-						item1.setup(_gthis.player,_gthis.currentLevel,_gthis.enemyArray,_gthis);
+						item1.setup(_gthis.player,_gthis.currentLevel,_gthis.enemyArray,_gthis,_gthis.playState);
 					}
 				}
 			};
 			this.displayOptionOverlay(itemNames,itemCallback);
 		}
 	}
-	,updateHUD: function(currentFloor,turnNumber,playerInput,levelInput,enemyArrayInput) {
+	,updateHUD: function(currentFloor,turnNumber,playerInput,levelInput,enemyArrayInput,playStateInput) {
 		this.textCurrentFloor.set_text("Floor: " + currentFloor);
 		this.textTurnNumber.set_text("Total turns: " + turnNumber);
 		this.player = playerInput;
 		this.currentLevel = levelInput;
 		this.enemyArray = enemyArrayInput;
+		this.playState = playStateInput;
 		this.updateHealth();
 	}
 	,toggleOverlay: function() {
@@ -8914,6 +8978,43 @@ HxOverrides.iter = function(a) {
 		return this.arr[this.cur++];
 	}};
 };
+var InflatableGuard = function() {
+	Item.call(this);
+	this.name = "Inflatable Guard";
+	this.uses = 1;
+};
+$hxClasses["InflatableGuard"] = InflatableGuard;
+InflatableGuard.__name__ = ["InflatableGuard"];
+InflatableGuard.__super__ = Item;
+InflatableGuard.prototype = $extend(Item.prototype,{
+	setup: function(player,level,enemyArray,hud,playState) {
+		var _gthis = this;
+		var neighbours = Lambda.filter(player.hexPos.returnNeighbours(),$bind(level,level.isInBounds));
+		neighbours = Lambda.filter(neighbours,function(hexCoord) {
+			return !level.isSolidAtHexCoord(hexCoord);
+		});
+		neighbours = Lambda.filter(neighbours,function(hexCoord1) {
+			var _g = 0;
+			while(_g < enemyArray.length) {
+				var enemy = enemyArray[_g];
+				++_g;
+				if(enemy.hexPos.equals(hexCoord1)) {
+					return false;
+				}
+			}
+			return true;
+		});
+		hud.displayPositionOverlay(Lambda.array(neighbours),function(hexCoord2) {
+			player.itemJustUsed = true;
+			_gthis.uses -= 1;
+			var inflatableGuard = new Guard(new DeadState());
+			inflatableGuard.teleport(hexCoord2,player.hexPos);
+			playState.add(inflatableGuard);
+			enemyArray.push(inflatableGuard);
+		});
+	}
+	,__class__: InflatableGuard
+});
 var IntIterator = function(min,max) {
 	this.min = min;
 	this.max = max;
@@ -8930,17 +9031,6 @@ IntIterator.prototype = {
 		return this.min++;
 	}
 	,__class__: IntIterator
-};
-var Item = function() {
-};
-$hxClasses["Item"] = Item;
-Item.__name__ = ["Item"];
-Item.prototype = {
-	name: null
-	,uses: null
-	,setup: function(player,level,enemyArray,hud) {
-	}
-	,__class__: Item
 };
 var Lambda = function() { };
 $hxClasses["Lambda"] = Lambda;
@@ -9970,7 +10060,8 @@ PatrollingState.prototype = $extend(CharacterState.prototype,{
 		}
 		var _gthis = this;
 		var playerInSight = this.checkForPlayer(player);
-		if(!playerInSight) {
+		var deadEnemyInSight = this.checkForDeadEnemies(level,allEnemies);
+		if(!playerInSight && !deadEnemyInSight) {
 			var callback = function() {
 				_gthis.checkForDeadEnemies(level,allEnemies);
 				_gthis.checkForPlayer(player);
@@ -10145,7 +10236,7 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 		if(this.hud.optionPauseToggle) {
 			this.hud.checkOptionResult();
 		}
-		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player,this.currentLevel,this.enemyArray);
+		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player,this.currentLevel,this.enemyArray,this);
 		if(this.player.currentHealth < 1) {
 			var nextState = new GameOverState();
 			if(flixel_FlxG.game._state.switchTo(nextState)) {
@@ -10241,9 +10332,9 @@ PlayState.prototype = $extend(flixel_FlxState.prototype,{
 		}
 	}
 	,addHUD: function() {
-		this.hud = new HUD(this.player,this.currentLevel,this.enemyArray);
+		this.hud = new HUD(this.player,this.currentLevel,this.enemyArray,this);
 		this.add(this.hud);
-		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player,this.currentLevel,this.enemyArray);
+		this.hud.updateHUD(this.currentFloor,this.turnNumber,this.player,this.currentLevel,this.enemyArray,this);
 	}
 	,addGuardOverlay: function() {
 		this.guardOverlay = new Overlay();
@@ -10277,6 +10368,8 @@ var Player = function(hexCoord) {
 	this.currentHealth = this.params.startingPlayerHealth;
 	this.items.push(new StunGun());
 	this.items.push(new WallGenerator());
+	this.items.push(new Blink());
+	this.items.push(new InflatableGuard());
 };
 $hxClasses["Player"] = Player;
 Player.__name__ = ["Player"];
@@ -10747,7 +10840,7 @@ $hxClasses["StunGun"] = StunGun;
 StunGun.__name__ = ["StunGun"];
 StunGun.__super__ = Item;
 StunGun.prototype = $extend(Item.prototype,{
-	setup: function(player,level,enemyArray,hud) {
+	setup: function(player,level,enemyArray,hud,playState) {
 		var _gthis = this;
 		var potentialHexes = this.potentialHexesInLineOfSight(player);
 		potentialHexes = Lambda.array(Lambda.filter(potentialHexes,function(hexCoord) {
@@ -11025,7 +11118,7 @@ $hxClasses["WallGenerator"] = WallGenerator;
 WallGenerator.__name__ = ["WallGenerator"];
 WallGenerator.__super__ = Item;
 WallGenerator.prototype = $extend(Item.prototype,{
-	setup: function(player,level,enemyArray,hud) {
+	setup: function(player,level,enemyArray,hud,playState) {
 		var _gthis = this;
 		var neighbours = Lambda.filter(player.hexPos.returnNeighbours(),$bind(level,level.isInBounds));
 		neighbours = Lambda.filter(neighbours,function(hexCoord) {
